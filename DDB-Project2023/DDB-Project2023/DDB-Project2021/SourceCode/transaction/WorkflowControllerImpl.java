@@ -3,6 +3,8 @@ package transaction;
 import java.rmi.*;
 import java.util.*;
 
+import javax.transaction.InvalidTransactionException;
+
 /** 
  * Workflow Controller for the Distributed Travel Reservation System.
  * 
@@ -59,6 +61,11 @@ public class WorkflowControllerImpl
 
 	while (!reconnect()) {
 	    // would be better to sleep a while
+		   try {
+                Thread.sleep(500);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
 	} 
     }
 
