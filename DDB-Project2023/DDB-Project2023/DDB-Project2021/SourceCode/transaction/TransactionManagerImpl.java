@@ -2,8 +2,10 @@ package transaction;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.rmi.*;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -36,7 +38,7 @@ public class TransactionManagerImpl
 	// status(String) of transactions(Integer xid)
 	private HashMap<Integer, String> xids;
 
-	// transactions  to be recovered (Integer xid)) of transactions(Integer xid)
+	// transactions to be recovered (Integer xid)) of transactions(Integer xid)
 	private HashMap<Integer, Integer> xids_to_be_recovered = new HashMap<>();
 
 	public static void main(String args[]) {
@@ -63,6 +65,7 @@ public class TransactionManagerImpl
 	}
 
 	public void enlist(int xid, ResourceManager rm) throws RemoteException {
+		//todo
 	}
 
 	public TransactionManagerImpl() throws RemoteException {
@@ -72,40 +75,39 @@ public class TransactionManagerImpl
 		this.RMs = new HashMap<>();
 		this.xids_to_be_recovered = new HashMap<>();
 
-		
 		this.recover();
 	}
 
 	/**
 	 * recover if TM die
-	 * load data from log file, and abort  transactions not in COMMITTED state
-	*/
+	 * load data from log file, and abort transactions not in COMMITTED state
+	 */
 	private void recover() {
 		// File dataDir = new File(DATA_ROOT);
 		// if (!dataDir.exists()) {
-		// 	dataDir.mkdirs();
+		// dataDir.mkdirs();
 		// }
 
-		//load data from log file
-		Object xidCounterTmp = utils.loadObject(TM_COUNTER_LOG);
+		// load data from log file
+		Object xidCounterTmp = this.loadLogData(TM_COUNTER_LOG);
 		if (xidCounterTmp != null)
 			this.xidCounter = (Integer) xidCounterTmp;
 
-        Object xidsTmp = this.loadCache(TM_LOG);
-        if (xidsTmp != null) {
-            this.xids = (HashMap<Integer, String>) xidsTmp;
-        }
+		Object xidsTmp = this.loadLogData(TM_LOG);
+		if (xidsTmp != null) {
+			this.xids = (HashMap<Integer, String>) xidsTmp;
+		}
 
-        Object RMsTmp = this.loadCache(TM_RMs_LOG);
-        if (RMsTmp != null) {
-            this.RMs = (HashMap<Integer, HashSet<ResourceManager>>) RMsTmp;
-        }
+		Object RMsTmp = this.loadLogData(TM_RMs_LOG);
+		if (RMsTmp != null) {
+			this.RMs = (HashMap<Integer, HashSet<ResourceManager>>) RMsTmp;
+		}
 
 		if (xidsTmp != null) {
 			Set<Integer> xidsKeys = this.xids.keySet();
-	        for (Integer key : xidsKeys) {
+			for (Integer key : xidsKeys) {
 				// if a xid not in COMMITTED state
-				//it should be aborted
+				// it should be aborted
 				if (!this.xids.get(key).equals(TransactionManager.COMMITTED)) {
 					this.xids.put(key, TransactionManager.ABORTED);
 				}
@@ -113,48 +115,171 @@ public class TransactionManagerImpl
 		}
 	}
 
+	@Override
+	public int start() throws RemoteException {
+		// store log data of new xid
+		synchronized (this.xidCounter) {
+			Integer newXid = this.xidCounter++;
+			this.storeLogData(TM_COUNTER_LOG, this.xidCounter);
 
-	
-    @Override
-    public int start() throws RemoteException {
-        synchronized (this.xidNum) {
-            Integer curXid = this.xidNum++;
-            this.storeToFile(TM_TRANSACTION_NUM_LOG_FILENAME, this.xidNum);
+			synchronized (this.xids) {
+				this.xids.put(newXid, TransactionManager.INITIATED);
+				this.storeLogData(TM_LOG, this.xids);
+			}
 
-            synchronized (this.xids) {
-                this.xids.put(curXid, TransactionManager.NEW);
-                this.storeToFile(TM_TRANSACTION_LOG_FILENAME, this.xids);
-            }
+			synchronized (this.RMs) {
+				this.RMs.put(newXid, new HashSet<>());
+				this.storeLogData(TM_RMs_LOG, this.RMs);
+			}
 
-            synchronized (this.xidRMs) {
-                this.xidRMs.put(curXid, new HashSet<>());
-                this.storeToFile(TM_TRANSACTION_RMs_LOG_FILENAME, this.xidRMs);
-            }
+			return newXid;
+		}
+	}
 
-            return curXid;
-        }
-    }
+	private Object loadLogData(String filePath) {
+		File file = new File(filePath);
+		ObjectInputStream oin = null;
+		try {
+			oin = new ObjectInputStream(new FileInputStream(file));
+			return oin.readObject();
+		} catch (Exception e) {
+			return null;
+		} finally {
+			try {
+				if (oin != null)
+					oin.close();
+			} catch (IOException e1) {
+				e1.printStackTrace();
+			}
+		}
+	}
+
+	@Override
+	public boolean commit(int xid)
+			throws RemoteException, TransactionAbortedException, InvalidTransactionExceptio {
+
+		if (!this.xids.containsKey(xid)) {
+			throw new TransactionAbortedException(xid, "TM");
+		}
+		/**
+		 * Two phase commit
+		 * prepare phase
+		 * log xid PREPARING
+		 */
+		synchronized (this.xids) {
+			xids.put(xid, TransactionManager.PREPARING);
+			this.storeLogData(TM_LOG, this.xids);
+		}
+		HashSet<ResourceManager> curRMs = this.RMs.get(xid);
+		for (ResourceManager resourceManager : curRMs) {
+			try {
+				System.out.println("call RM prepare: " + xid + ": " + resourceManager.getID());
+				boolean prepared = resourceManager.prepare(xid);
+				if (!prepared) {
+					this.abort(xid);
+					throw new TransactionAbortedException(xid, "RM is not prepared,aborted");
+				}
+			} catch (Exception e) {
+				/**if RM die AfterPrepare or BeforePrepare*/
+				// e.printStackTrace();
+				this.abort(xid);
+				throw new TransactionAbortedException(xid, "RM aborted");
+			}
+		}
+		/**
+		 * all RMs prepared
+		 * BeforeCommit -> TM die before COMMITTED is logged
+		 * all rm will call enlist() later when TM restart, and enlist() will mark xid ABORTED
+		 * */
+
+		if (this.dieTime.equals("BeforeCommit")) {
+			this.dieNow();
+		}
+		/**
+		 * all RMs COMMITTED
+		 * log xid COMMITTED
+		 * */
+		synchronized (this.xids) {
+			xids.put(xid, TransactionManager.COMMITTED);
+			this.storeLogData(TM_LOG, this.xids);
+		}
+		/**
+		 * 
+		 * AfterCommit -> TM die after COMMITTED is logged
+		 * call recover() and recover the xid
+		 * call enlist() and commit RM
+		 * */
+
+		if (this.dieTime.equals("AfterCommit")) {
+			this.dieNow();
+		}
+
+		/**
+		 * Two phase commit
+		 * commit phase
+		 * log all data
+		 */
+		Set<ResourceManager> committedRMs = new HashSet<>();
+		for (ResourceManager resourceManager : curRMs) {
+			try {
+				System.out.println("call rm commit " + xid + ": " + resourceManager.getID());
+				resourceManager.commit(xid);
+				committedRMs.add(resourceManager);
+			} catch (Exception e) {
+				/**FdieRMBeforeCommit -> rm dies before/during commit*/
+				System.out.println("rm die when commit: " + resourceManager.getID());
+				e.printStackTrace();
+				// FdieRMBeforeCommit
+			}
+		}
+
+		if (committedRMs.size() == curRMs.size()) {
+			synchronized (this.RMs) {
+				this.RMs.remove(xid);
+				this.storeLogData(TM_RMs_LOG, this.RMs);
+			}
+
+			synchronized (this.xids) {
+				this.xids.remove(xid);
+				this.storeLogData(TM_LOG, this.xids);
+			}
+		} else {
+			/**FdieRMBeforeCommit
+			 * store unfinished transactions(RMs that not commited)
+			*/
+			synchronized (this.RMs) {
+				curRMs.removeAll(committedRMs);
+				this.RMs.put(xid, curRMs);
+				this.storeLogData(TM_RMs_LOG, this.RMs);
+			}
+		}
+		return true;
+	}
 
 
+	public void abort(int xid) throws RemoteException,InvalidTransactionException {
+	 	//todo
+	}
 
-    private Object loadCache(String filePath) {
-        File file = new File(filePath);
-        ObjectInputStream oin = null;
-        try {
-            oin = new ObjectInputStream(new FileInputStream(file));
-            return oin.readObject();
-        } catch (Exception e) {
-            return null;
-        } finally {
-            try {
-                if (oin != null)
-                    oin.close();
-            } catch (IOException e1) {
-                e1.printStackTrace();
-            }
-        }
-    }
-
+	private void storeLogData(String filePath, Object obj) {
+		File file = new File(filePath);
+		file.getParentFile().mkdirs();
+		ObjectOutputStream oout = null;
+		try {
+			oout = new ObjectOutputStream(new FileOutputStream(file));
+			oout.writeObject(obj);
+			oout.flush();
+		} catch (Exception e) {
+			e.printStackTrace();
+		} finally {
+			try {
+				if (oout != null)
+					oout.close();
+			} catch (IOException e1) {
+				e1.printStackTrace();
+			}
+		}
+	}
 
 
 

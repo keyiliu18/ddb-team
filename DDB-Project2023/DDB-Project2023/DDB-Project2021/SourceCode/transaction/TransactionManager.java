@@ -75,8 +75,8 @@ public interface TransactionManager extends Remote {
     public static final String RMIName = "TM";
 
     /** The transaction's status */
-    public static final String START = "START";
-    public static final String PREPARED = "PREPARED";
+    public static final String INITIATED  = "INITIATED";
+    public static final String PREPARING = "PREPARING";
     public static final String COMMITTED = "COMMITTED";
     public static final String ABORTED = "ABORTED";
 }
