@@ -2,7 +2,8 @@ package transaction;
 
 import java.rmi.*;
 
-import javax.transaction.InvalidTransactionException;
+import transaction.InvalidTransactionException;
+import transaction.TransactionAbortedException;
 
 /**
  * Interface for the Transaction Manager of the Distributed Travel
@@ -30,7 +31,7 @@ public interface TransactionManager extends Remote {
 
     public void ping() throws RemoteException;
 
-    public void enlist(int xid, ResourceManager rm) throws RemoteException;
+    public void enlist(int xid, ResourceManager rm) throws RemoteException,InvalidTransactionException;
 
     public void setDieTime(String time) throws RemoteException;
 
@@ -66,6 +67,7 @@ public interface TransactionManager extends Remote {
      *
      * @throws RemoteException             on communications failure.
      * @throws InvalidTransactionException if transaction id is invalid.
+
      */
     public void abort(int xid)
             throws RemoteException,

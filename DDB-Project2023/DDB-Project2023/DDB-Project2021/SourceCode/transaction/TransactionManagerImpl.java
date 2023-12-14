@@ -6,11 +6,16 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.net.Socket;
 import java.rmi.*;
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+
+import org.jcp.xml.dsig.internal.dom.Utils;
 
 /**
  * * Transaction Manager for the Distributed Travel Reservation System.
@@ -26,7 +31,7 @@ public class TransactionManagerImpl
 	private final static String DATA_ROOT = "data/";
 	private final static String TM_COUNTER_LOG = DATA_ROOT + "tm_xidCounter.log";
 	private final static String TM_LOG = DATA_ROOT + "tm_xids.log";
-	private final static String TM_RMs_LOG = DATA_ROOT + "tm_xidRMs.log";
+	private final static String TM_RMs_LOG = DATA_ROOT + "tm_RMs.log";
 	private final static String TM_RECOVER_LOG = DATA_ROOT + "tm_xidRecover.log";
 
 	private Integer xidCounter;// transaction id
@@ -39,7 +44,7 @@ public class TransactionManagerImpl
 	private HashMap<Integer, String> xids;
 
 	// transactions to be recovered (Integer xid)) of transactions(Integer xid)
-	private HashMap<Integer, Integer> xids_to_be_recovered = new HashMap<>();
+	private HashMap<Integer, Integer> xids_recover = new HashMap<>();
 
 	public static void main(String args[]) {
 		System.setSecurityManager(new RMISecurityManager());
@@ -53,7 +58,9 @@ public class TransactionManagerImpl
 
 		try {
 			TransactionManagerImpl obj = new TransactionManagerImpl();
-			Naming.rebind(rmiPort + TransactionManager.RMIName, obj);
+			// Naming.rebind(rmiPort + TransactionManager.RMIName, obj);
+			 Registry registry = LocateRegistry.getRegistry(Utils.getHostname(), 3345,Socket::new);
+            registry.rebind(rmiPort + TransactionManager.RMIName, obj);
 			System.out.println("TM bound");
 		} catch (Exception e) {
 			System.err.println("TM not bound:" + e);
@@ -64,8 +71,124 @@ public class TransactionManagerImpl
 	public void ping() throws RemoteException {
 	}
 
-	public void enlist(int xid, ResourceManager rm) throws RemoteException {
-		//todo
+	public void enlist(int xid, ResourceManager rm) throws RemoteException,InvalidTransactionException {
+		if (!this.xids.containsKey(xid)) {
+			rm.abort(xid);
+			return;
+		}
+
+		synchronized (this.xids) {
+			String xidStatus = this.xids.get(xid);
+			/**
+			 * if transaction's status is ABORTED, the realted RM will abort
+			 * after abort，deletes the current transaction information
+			 */
+			if (xidStatus.equals(TransactionManager.ABORTED)) {
+				rm.abort(xid);
+				synchronized (this.RMs) {
+					Set<ResourceManager> temp = this.RMs.get(xid);
+					ResourceManager randomRemove = temp.iterator().next();
+					temp.remove(randomRemove);
+
+					if (temp.size() == 0) {
+						this.RMs.remove(xid);
+						this.storeLogData(TM_RMs_LOG, this.RMs);
+
+						this.xids.remove(xid);
+						this.storeLogData(TM_LOG, this.xids);
+					} else {
+						this.RMs.put(xid, temp);
+						this.storeLogData(TM_RMs_LOG, this.RMs);
+					}
+				}
+
+				return;
+			}
+
+			/**
+			 * if transaction's status is COMMITTED, the realted RM will commit
+			 * after commit, deletes the current transaction information
+			 */
+			if (xidStatus.equals(TransactionManager.COMMITTED)) {
+				rm.commit(xid);
+
+				synchronized (this.RMs) {
+					Set<ResourceManager> temp = this.RMs.get(xid);
+					System.out.println(temp.toString());
+					ResourceManager randomRemove = temp.iterator().next();
+					System.out.println(randomRemove);
+
+					temp.remove(randomRemove);
+					if (temp.size() == 0) {
+						this.RMs.remove(xid);
+						this.storeLogData(TM_RMs_LOG, this.RMs);
+
+						this.xids.remove(xid);
+						this.storeLogData(TM_LOG, this.xids);
+					  } else {
+						this.RMs.put(xid, temp);
+						this.storeLogData(TM_RMs_LOG, this.RMs);
+					}
+				}
+
+				return;
+			}
+
+			synchronized (this.RMs) {
+				Set<ResourceManager> temp = this.RMs.get(xid);
+				ResourceManager findSameRMId = null;
+				boolean abort = false;
+				for (ResourceManager curRm : temp) {
+					try {
+						if (curRm.getID().equals(rm.getID())) {
+							findSameRMId = curRm;
+						}
+					} catch (Exception e) {
+						/**
+						 * if some RM die(dieRM, dieRMAfterEnlist)
+						 * then RMs will abort and TM abort
+						 */
+						abort = true;
+						break;
+					}
+				}
+				/*
+				 * If any RM is unabled,
+				 * TM issues a rollback request to all RMs
+				 */
+				if (abort) {
+					rm.abort(xid);
+
+					ResourceManager randomRemove = temp.iterator().next();
+					temp.remove(randomRemove);
+					if (temp.size() == 0) {
+						this.RMs.remove(xid);
+						this.storeLogData(TM_RMs_LOG, this.RMs);
+
+						this.xids.remove(xid);
+						this.storeLogData(TM_LOG, this.xids);
+					} else {
+						this.RMs.put(xid, temp);
+						this.storeLogData(TM_RMs_LOG, this.RMs);
+
+						this.xids.put(xid, TransactionManager.ABORTED);
+						this.storeLogData(TM_LOG, this.xids);
+					}
+
+					return;
+				}
+
+				/**don't find currnet rm in RMs
+				 * add it into RMs
+				*/
+				if (findSameRMId == null) {
+					temp.add(rm);
+					this.RMs.put(xid, temp);
+					this.storeLogData(TM_RMs_LOG, this.RMs);
+					return;
+				}
+			}
+		}
 	}
 
 	public TransactionManagerImpl() throws RemoteException {
@@ -73,7 +196,7 @@ public class TransactionManagerImpl
 		this.dieTime = "noDie";
 		this.xids = new HashMap<>();
 		this.RMs = new HashMap<>();
-		this.xids_to_be_recovered = new HashMap<>();
+		this.xids_recover = new HashMap<>();
 
 		this.recover();
 	}
@@ -83,11 +206,6 @@ public class TransactionManagerImpl
 	 * load data from log file, and abort transactions not in COMMITTED state
 	 */
 	private void recover() {
-		// File dataDir = new File(DATA_ROOT);
-		// if (!dataDir.exists()) {
-		// dataDir.mkdirs();
-		// }
-
 		// load data from log file
 		Object xidCounterTmp = this.loadLogData(TM_COUNTER_LOG);
 		if (xidCounterTmp != null)
@@ -106,8 +224,8 @@ public class TransactionManagerImpl
 		if (xidsTmp != null) {
 			Set<Integer> xidsKeys = this.xids.keySet();
 			for (Integer key : xidsKeys) {
-				// if a xid not in COMMITTED state
-				// it should be aborted
+				/**if a xid not in COMMITTED state 
+				 * it should be aborted*/
 				if (!this.xids.get(key).equals(TransactionManager.COMMITTED)) {
 					this.xids.put(key, TransactionManager.ABORTED);
 				}
@@ -156,7 +274,7 @@ public class TransactionManagerImpl
 
 	@Override
 	public boolean commit(int xid)
-			throws RemoteException, TransactionAbortedException, InvalidTransactionExceptio {
+			throws RemoteException, TransactionAbortedException, InvalidTransactionException {
 
 		if (!this.xids.containsKey(xid)) {
 			throw new TransactionAbortedException(xid, "TM");
@@ -180,7 +298,7 @@ public class TransactionManagerImpl
 					throw new TransactionAbortedException(xid, "RM is not prepared,aborted");
 				}
 			} catch (Exception e) {
-				/**if RM die AfterPrepare or BeforePrepare*/
+				/** if RM die AfterPrepare or BeforePrepare */
 				// e.printStackTrace();
 				this.abort(xid);
 				throw new TransactionAbortedException(xid, "RM aborted");
@@ -189,8 +307,9 @@ public class TransactionManagerImpl
 		/**
 		 * all RMs prepared
 		 * BeforeCommit -> TM die before COMMITTED is logged
-		 * all rm will call enlist() later when TM restart, and enlist() will mark xid ABORTED
-		 * */
+		 * all rm will call enlist() later when TM restart, and enlist() will mark xid
+		 * ABORTED
+		 */
 
 		if (this.dieTime.equals("BeforeCommit")) {
 			this.dieNow();
@@ -198,7 +317,7 @@ public class TransactionManagerImpl
 		/**
 		 * all RMs COMMITTED
 		 * log xid COMMITTED
-		 * */
+		 */
 		synchronized (this.xids) {
 			xids.put(xid, TransactionManager.COMMITTED);
 			this.storeLogData(TM_LOG, this.xids);
@@ -208,7 +327,7 @@ public class TransactionManagerImpl
 		 * AfterCommit -> TM die after COMMITTED is logged
 		 * call recover() and recover the xid
 		 * call enlist() and commit RM
-		 * */
+		 */
 
 		if (this.dieTime.equals("AfterCommit")) {
 			this.dieNow();
@@ -226,8 +345,8 @@ public class TransactionManagerImpl
 				resourceManager.commit(xid);
 				committedRMs.add(resourceManager);
 			} catch (Exception e) {
-				/**FdieRMBeforeCommit -> rm dies before/during commit*/
-				System.out.println("rm die when commit: " + resourceManager.getID());
+				/** FdieRMBeforeCommit -> rm dies before/during commit */
+				System.out.println("rm die when commit" );
 				e.printStackTrace();
 				// FdieRMBeforeCommit
 			}
@@ -244,9 +363,10 @@ public class TransactionManagerImpl
 				this.storeLogData(TM_LOG, this.xids);
 			}
 		} else {
-			/**FdieRMBeforeCommit
+			/**
+			 * FdieRMBeforeCommit
 			 * store unfinished transactions(RMs that not commited)
-			*/
+			 */
 			synchronized (this.RMs) {
 				curRMs.removeAll(committedRMs);
 				this.RMs.put(xid, curRMs);
@@ -257,9 +377,36 @@ public class TransactionManagerImpl
 	}
 
 
-	public void abort(int xid) throws RemoteException,InvalidTransactionException {
-	 	//todo
-	}
+    @Override
+    public void abort(int xid) throws RemoteException, InvalidTransactionException {
+        if (!this.xids.containsKey(xid)) {
+            throw new InvalidTransactionException(xid, "TM abort");
+        }
+
+        HashSet<ResourceManager> resourceManagers = this.RMs.get(xid);
+        HashSet<ResourceManager> abortedRMs = new HashSet<>();
+        for (ResourceManager resourceManager : resourceManagers) {
+            try {
+                resourceManager.abort(xid);
+                abortedRMs.add(resourceManager);
+            } catch (Exception e) {
+                // e.printStackTrace();
+
+                // FdieRMBeforeAbort
+            }
+        }
+
+        synchronized (this.RMs) {
+            this.RMs.remove(xid);
+            this.storeLogData(TM_RMs_LOG, this.RMs);
+        }
+
+        synchronized (this.xids) {
+            this.xids.remove(xid);
+            this.storeLogData(TM_LOG, this.xids);
+        }
+
+    }
 
 	private void storeLogData(String filePath, Object obj) {
 		File file = new File(filePath);
@@ -280,8 +427,6 @@ public class TransactionManagerImpl
 			}
 		}
 	}
-
-
 
 	public boolean dieNow()
 			throws RemoteException {
