@@ -364,7 +364,7 @@ public class TransactionManagerImpl
 			}
 		} else {
 			/**
-			 * FdieRMBeforeCommit
+			 * dieRMBeforeCommit
 			 * store unfinished transactions(RMs that not commited)
 			 */
 			synchronized (this.RMs) {
