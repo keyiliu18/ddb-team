@@ -80,15 +80,16 @@ public class TransactionManagerImpl
 		synchronized (this.xids) {
 			String xidStatus = this.xids.get(xid);
 			/**
-			 * if transaction's status is ABORTED, the realted RM will abort
-			 * after abort，deletes the current transaction information
+			 * if transaction is recoverd from log and transaction's status is ABORTED
+			 * the realted RM will abort
+			 * after abort this rm，deletes the current transaction information
 			 */
 			if (xidStatus.equals(TransactionManager.ABORTED)) {
 				rm.abort(xid);
 				synchronized (this.RMs) {
 					Set<ResourceManager> temp = this.RMs.get(xid);
-					ResourceManager randomRemove = temp.iterator().next();
-					temp.remove(randomRemove);
+					ResourceManager oneRM = temp.iterator().next();
+					temp.remove(oneRM);
 
 					if (temp.size() == 0) {
 						this.RMs.remove(xid);
@@ -106,19 +107,20 @@ public class TransactionManagerImpl
 			}
 
 			/**
-			 * if transaction's status is COMMITTED, the realted RM will commit
-			 * after commit, deletes the current transaction information
+			 * if transaction is recoverd from log abd transaction's status is COMMITTED, 
+			 * the realted RM will commit
+			 * after commit this rm, deletes the current transaction information
 			 */
 			if (xidStatus.equals(TransactionManager.COMMITTED)) {
 				rm.commit(xid);
 
 				synchronized (this.RMs) {
 					Set<ResourceManager> temp = this.RMs.get(xid);
-					System.out.println(temp.toString());
-					ResourceManager randomRemove = temp.iterator().next();
-					System.out.println(randomRemove);
+					// System.out.println(temp.toString());
+					ResourceManager oneRM = temp.iterator().next();
+					System.out.println(oneRM);
 
-					temp.remove(randomRemove);
+					temp.remove(oneRM);
 					if (temp.size() == 0) {
 						this.RMs.remove(xid);
 						this.storeLogData(TM_RMs_LOG, this.RMs);
@@ -148,19 +150,21 @@ public class TransactionManagerImpl
 						 * if some RM die(dieRM, dieRMAfterEnlist)
 						 * then RMs will abort and TM abort
 						 */
+						System.out.println("(dieRM, dieRMAfterEnlist),some rm die when enlist");
 						abort = true;
 						break;
 					}
 				}
 				/*
 				 * If any RM is unabled,
-				 * TM issues a rollback request to all RMs
+				 * this TM is  ABORTED
+				 * log status
 				 */
 				if (abort) {
 					rm.abort(xid);
 
-					ResourceManager randomRemove = temp.iterator().next();
-					temp.remove(randomRemove);
+					ResourceManager oneRM = temp.iterator().next();
+					temp.remove(oneRM);
 					if (temp.size() == 0) {
 						this.RMs.remove(xid);
 						this.storeLogData(TM_RMs_LOG, this.RMs);
@@ -206,7 +210,7 @@ public class TransactionManagerImpl
 	 * load data from log file, and abort transactions not in COMMITTED state
 	 */
 	private void recover() {
-		// load data from log file
+		/**load data from log file*/
 		Object xidCounterTmp = this.loadLogData(TM_COUNTER_LOG);
 		if (xidCounterTmp != null)
 			this.xidCounter = (Integer) xidCounterTmp;
@@ -225,7 +229,8 @@ public class TransactionManagerImpl
 			Set<Integer> xidsKeys = this.xids.keySet();
 			for (Integer key : xidsKeys) {
 				/**if a xid not in COMMITTED state 
-				 * it should be aborted*/
+				 * it should be aborted
+				 * so after recover(), the loaded xids are either COMMITTED or ABORTED*/
 				if (!this.xids.get(key).equals(TransactionManager.COMMITTED)) {
 					this.xids.put(key, TransactionManager.ABORTED);
 				}
@@ -235,7 +240,7 @@ public class TransactionManagerImpl
 
 	@Override
 	public int start() throws RemoteException {
-		// store log data of new xid
+		/**store log data of new xid*/
 		synchronized (this.xidCounter) {
 			Integer newXid = this.xidCounter++;
 			this.storeLogData(TM_COUNTER_LOG, this.xidCounter);
@@ -335,13 +340,13 @@ public class TransactionManagerImpl
 
 		/**
 		 * Two phase commit
-		 * commit phase
+		 * commit phase, The TM issues a commit request to all RM participants
 		 * log all data
 		 */
 		Set<ResourceManager> committedRMs = new HashSet<>();
 		for (ResourceManager resourceManager : curRMs) {
 			try {
-				System.out.println("call rm commit " + xid + ": " + resourceManager.getID());
+				System.out.println("rm commit " + xid + ": " + resourceManager.getID());
 				resourceManager.commit(xid);
 				committedRMs.add(resourceManager);
 			} catch (Exception e) {
@@ -352,6 +357,10 @@ public class TransactionManagerImpl
 			}
 		}
 
+		/**
+		 * if all RMs commited
+		 * this xid is finished
+		 */
 		if (committedRMs.size() == curRMs.size()) {
 			synchronized (this.RMs) {
 				this.RMs.remove(xid);
@@ -364,7 +373,7 @@ public class TransactionManagerImpl
 			}
 		} else {
 			/**
-			 * dieRMBeforeCommit
+			 * if dieRMBeforeCommit, theb some rms are committed but some are not
 			 * store unfinished transactions(RMs that not commited)
 			 */
 			synchronized (this.RMs) {
