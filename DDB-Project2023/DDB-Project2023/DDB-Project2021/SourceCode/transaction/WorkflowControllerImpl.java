@@ -13,6 +13,8 @@ import javax.transaction.InvalidTransactionException;
  * instead of doing the things itself.
  */
 
+
+import org.jcp.xml.dsig.internal.dom.Utils;
 public class WorkflowControllerImpl
     extends java.rmi.server.UnicastRemoteObject
     implements WorkflowController {
@@ -334,30 +336,32 @@ public class WorkflowControllerImpl
     }
     public boolean dieRMAfterEnlist(String who)
 	throws RemoteException {
-	return true;
+		return this.dieRMIWhen(who, "AfterEnlist");
     }
     public boolean dieRMBeforePrepare(String who)
 	throws RemoteException {
-	return true;
+		return this.dieRMIWhen(who, "BeforePrepare");
     }
     public boolean dieRMAfterPrepare(String who)
 	throws RemoteException {
-	return true;
+		return this.dieRMIWhen(who, "AfterPrepare");
     }
     public boolean dieTMBeforeCommit()
 	throws RemoteException {
+		this.tm.setDieTime("BeforeCommit");
 	return true;
     }
     public boolean dieTMAfterCommit()
 	throws RemoteException {
+		this.tm.setDieTime("AfterCommit");
 	return true;
     }
     public boolean dieRMBeforeCommit(String who)
 	throws RemoteException {
-	return true;
+		return this.dieRMIWhen(who, "BeforeCommit");
     }
     public boolean dieRMBeforeAbort(String who)
 	throws RemoteException {
-	return true;
+		return this.dieRMIWhen(who, "BeforeAbort");
     }
 }
