@@ -4,9 +4,9 @@ import java.rmi.Remote;
 import java.rmi.RemoteException;
 import java.util.Collection;
 import java.util.Set;
-
+// import transaction.models.ResourceItem;
 import transaction.InvalidTransactionException;
-
+import transaction.models.ResourceItem;
 import lockmgr.DeadlockException;
 
 /**

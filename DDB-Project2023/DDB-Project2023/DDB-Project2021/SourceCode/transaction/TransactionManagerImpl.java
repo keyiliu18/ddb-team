@@ -15,7 +15,9 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import org.jcp.xml.dsig.internal.dom.Utils;
+// import org.jcp.xml.dsig.internal.dom.Utils;
+
+// import org.jcp.xml.dsig.internal.dom.Utils;
 
 /**
  * * Transaction Manager for the Distributed Travel Reservation System.
@@ -55,6 +57,7 @@ public class TransactionManagerImpl
 		} else if (!rmiPort.equals("")) {
 			rmiPort = "//:" + rmiPort + "/";
 		}
+		System.out.println(rmiPort);
 
 		try {
 			TransactionManagerImpl obj = new TransactionManagerImpl();
@@ -69,6 +72,7 @@ public class TransactionManagerImpl
 	}
 
 	public void ping() throws RemoteException {
+		System.out.println("TM ping");
 	}
 
 	public void enlist(int xid, ResourceManager rm) throws RemoteException,InvalidTransactionException {
@@ -82,12 +86,12 @@ public class TransactionManagerImpl
 			/**
 			 * if transaction is recoverd from log and transaction's status is ABORTED
 			 * the realted RM will abort
-			 * after abort this rm，deletes the current transaction information
+			 * after abort this rm,deletes the current transaction information
 			 */
 			if (xidStatus.equals(TransactionManager.ABORTED)) {
 				rm.abort(xid);
 				synchronized (this.RMs) {
-					Set<ResourceManager> temp = this.RMs.get(xid);
+					HashSet<ResourceManager> temp = this.RMs.get(xid);
 					ResourceManager oneRM = temp.iterator().next();
 					temp.remove(oneRM);
 
@@ -100,6 +104,7 @@ public class TransactionManagerImpl
 					} else {
 						this.RMs.put(xid, temp);
 						this.storeLogData(TM_RMs_LOG, this.RMs);
+						
 					}
 				}
 
@@ -115,7 +120,7 @@ public class TransactionManagerImpl
 				rm.commit(xid);
 
 				synchronized (this.RMs) {
-					Set<ResourceManager> temp = this.RMs.get(xid);
+					HashSet<ResourceManager> temp = this.RMs.get(xid);
 					// System.out.println(temp.toString());
 					ResourceManager oneRM = temp.iterator().next();
 					System.out.println(oneRM);
@@ -137,7 +142,7 @@ public class TransactionManagerImpl
 			}
 
 			synchronized (this.RMs) {
-				Set<ResourceManager> temp = this.RMs.get(xid);
+				HashSet<ResourceManager> temp = this.RMs.get(xid);
 				ResourceManager findSameRMId = null;
 				boolean abort = false;
 				for (ResourceManager curRm : temp) {
@@ -241,6 +246,7 @@ public class TransactionManagerImpl
 	@Override
 	public int start() throws RemoteException {
 		/**store log data of new xid*/
+		System.out.println("stary tm");
 		synchronized (this.xidCounter) {
 			Integer newXid = this.xidCounter++;
 			this.storeLogData(TM_COUNTER_LOG, this.xidCounter);
@@ -444,4 +450,7 @@ public class TransactionManagerImpl
 						// but we still need it to please the compiler.
 	}
 
+    public void setDieTime(String dieTime) {
+        this.dieTime = dieTime;
+    }
 }

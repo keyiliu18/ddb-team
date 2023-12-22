@@ -1,6 +1,8 @@
 RMIREGPORT =3345 
 PROJECTROOT = ..
-PATH = /usr/bin
+# RM and PATH are your os's Environment path 
+# PATH = /usr/bin
+# RM = /bin/rm
 all : server client
 
 server : ResourceManager.class \
@@ -43,6 +45,7 @@ runclient : client
 
 clean :
 	$(RM) *.class
+	$(RM) ./models/*.class
 
 %.class : %.java
 	$(PATH)/javac -classpath $(PROJECTROOT) $<

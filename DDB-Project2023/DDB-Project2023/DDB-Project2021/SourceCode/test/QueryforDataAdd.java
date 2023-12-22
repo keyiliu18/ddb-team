@@ -11,16 +11,15 @@ public class QueryforDataAdd{
         WorkflowController wc = Connector.connectWC();
         try {
             int xid = wc.start();
-            wc.addFlight(xid, "B1234", 100, 200);
-            wc.addRooms(xid, "shanghai", 300, 350);
+            wc.addFlight(xid, "B1234", 100, 250);
+            wc.addRooms(xid, "shanghai", 250, 350);
             wc.addCars(xid, "BEIJING", 100, 30);
-
             int r1 = wc.queryFlight(xid, "B1234");
             check(100, r1);
             int r2 = wc.queryFlightPrice(xid, "B1234");
-            check(200, r2);
+            check(250, r2);
             int r3 = wc.queryRooms(xid, "shanghai");
-            check(300, r3);
+            check(250, r3);
             int r4 = wc.queryRoomsPrice(xid, "shanghai");
             check(350, r4);
             int r5 = wc.queryCars(xid, "BEIJING");

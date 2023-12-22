@@ -4,13 +4,15 @@ import transaction.InvalidIndexException;
 import transaction.InvalidTransactionException;
 import transaction.TransactionAbortedException;
 
+
 import java.rmi.*;
 import java.util.*;
 import java.io.*;
-
+import java.rmi.registry.Registry;
+import java.rmi.registry.LocateRegistry;
 import lockmgr.DeadlockException;
-
-import javax.transaction.InvalidTransactionException;
+import java.net.Socket;
+import transaction.InvalidTransactionException;
 
 /** 
  * Workflow Controller for the Distributed Travel Reservation System.
@@ -21,7 +23,7 @@ import javax.transaction.InvalidTransactionException;
  */
 
 
-import org.jcp.xml.dsig.internal.dom.Utils;
+// import org.jcp.xml.dsig.internal.dom.Utils;
 public class WorkflowControllerImpl
     extends java.rmi.server.UnicastRemoteObject
     implements WorkflowController {
@@ -53,7 +55,9 @@ public class WorkflowControllerImpl
 
 	try {
 	    WorkflowControllerImpl obj = new WorkflowControllerImpl();
-	    Naming.rebind(rmiPort + WorkflowController.RMIName, obj);
+	    // Naming.rebind(rmiPort + WorkflowController.RMIName, obj);
+		Registry registry = LocateRegistry.getRegistry(Utils.getHostname(), 3345, Socket::new);
+		registry.rebind(rmiPort + WorkflowController.RMIName, obj);
 	    System.out.println("WC bound");
 	}
 	catch (Exception e) {
@@ -136,6 +140,7 @@ public class WorkflowControllerImpl
     // TRANSACTION INTERFACE
     public int start()
 	throws RemoteException {
+		System.out.println("stary wc");
 		int xid=tm.start();//todo
 		this.xids.add(xid);
 		// return (xidCounter++);
@@ -152,17 +157,17 @@ public class WorkflowControllerImpl
 			throw new InvalidTransactionException(xid, "commit");
 		}
 		System.out.println("Committing");
-		try{
+		// try{
 			boolean ret = tm.commit(xid);//todo
 			this.xids.remove(xid);
 
 			this.storeTransactionLogs(this.xids);
 			return ret;
-		}
-		catch (DeadlockException e) {
-            this.abort(xid);
-            throw new TransactionAbortedException(xid, e.getMessage());
-        }
+		// }
+		// catch (DeadlockException e) {
+        //     this.abort(xid);
+        //     throw new TransactionAbortedException(xid, e.getMessage());
+        // }
     }
 
     public void abort(int xid)
@@ -196,15 +201,18 @@ public class WorkflowControllerImpl
 		try{
 			resourceItem=this.rmFlights.query(xid, this.rmFlights.getID(),flightNum);
 		}catch(DeadlockException e){
+			System.out.println("query deaadlock when addFlight");
 			this.abort(xid);
 			throw new TransactionAbortedException(xid, e.getMessage());
 		}
 		// create a new flight
 		if(resourceItem==null){
-			Flight flight = new Flight(flightNum, price, numSeats, price);
+			Flight flight = new Flight(flightNum, price, numSeats, numSeats);
+			
 			try{
 				return this.rmFlights.insert(xid, this.rmFlights.getID(),(ResourceItem) flight);
 			}catch(DeadlockException e){
+				System.out.println("insert deaadlock when addFlight");
 				this.abort(xid);
 				throw new TransactionAbortedException(xid, e.getMessage());
 			}
@@ -220,6 +228,7 @@ public class WorkflowControllerImpl
 		try{
 			return this.rmFlights.update(xid, this.rmFlights.getID(),flightNum, (ResourceItem)flight);
 		}catch(DeadlockException e){
+			System.out.println("update deaadlock when addFlight");
 			this.abort(xid);
 			throw new TransactionAbortedException(xid, e.getMessage());
 		}
@@ -514,6 +523,8 @@ public class WorkflowControllerImpl
 			if (resourceItem == null) {// no exist
 				return -1;
 			}else{
+				System.out.println(resourceItem);
+				System.out.println(((Flight) resourceItem).getNumAvail());
 				return ((Flight) resourceItem).getNumAvail();
 			}
 		} catch (DeadlockException e) {
@@ -718,6 +729,7 @@ public class WorkflowControllerImpl
             }
             this.rmFlights.update(xid, this.rmFlights.getID(), flightNum, (ResourceItem)flight);
             Reservation reservation = new Reservation(custName, Reservation.RESERVATION_TYPE_FLIGHT, flightNum);
+			// ResourceItem reservation = new Reservation(custName, Reservation.RESERVATION_TYPE_FLIGHT, flightNum);
             return this.rmCustomers.insert(xid, ResourceManager.TableNameReservations, reservation);
         } catch (DeadlockException e) {
             this.abort(xid);
@@ -874,26 +886,42 @@ public class WorkflowControllerImpl
 	}
 
 	try {
-	    rmFlights =
-		(ResourceManager)Naming.lookup(rmiPort +
-					       ResourceManager.RMINameFlights);
-	    System.out.println("WC bound to RMFlights");
-	    rmRooms =
-		(ResourceManager)Naming.lookup(rmiPort +
-					       ResourceManager.RMINameRooms);
-	    System.out.println("WC bound to RMRooms");
-	    rmCars =
-		(ResourceManager)Naming.lookup(rmiPort +
-					       ResourceManager.RMINameCars);
-	    System.out.println("WC bound to RMCars");
-	    rmCustomers =
-		(ResourceManager)Naming.lookup(rmiPort +
-					       ResourceManager.RMINameCustomers);
-	    System.out.println("WC bound to RMCustomers");
-	    tm =
-		(TransactionManager)Naming.lookup(rmiPort +
-						  TransactionManager.RMIName);
-	    System.out.println("WC bound to TM");
+	    // rmFlights =
+		// (ResourceManager)Naming.lookup(rmiPort +
+		// 			       ResourceManager.RMINameFlights);
+	    // System.out.println("WC bound to RMFlights");
+	    // rmRooms =
+		// (ResourceManager)Naming.lookup(rmiPort +
+		// 			       ResourceManager.RMINameRooms);
+	    // System.out.println("WC bound to RMRooms");
+	    // rmCars =
+		// (ResourceManager)Naming.lookup(rmiPort +
+		// 			       ResourceManager.RMINameCars);
+	    // System.out.println("WC bound to RMCars");
+	    // rmCustomers =
+		// (ResourceManager)Naming.lookup(rmiPort +
+		// 			       ResourceManager.RMINameCustomers);
+	    // System.out.println("WC bound to RMCustomers");
+	    // tm =
+		// (TransactionManager)Naming.lookup(rmiPort +
+		// 				  TransactionManager.RMIName);
+	    // System.out.println("WC bound to TM");
+		Registry registry = LocateRegistry.getRegistry(Utils.getHostname(), 3345, Socket::new);
+
+		rmFlights = (ResourceManager) registry.lookup(rmiPort + ResourceManager.RMINameFlights);
+		System.out.println("WC bound to RMFlights");
+
+		rmRooms = (ResourceManager) registry.lookup(rmiPort + ResourceManager.RMINameRooms);
+		System.out.println("WC bound to RMRooms");
+
+		rmCars = (ResourceManager) registry.lookup(rmiPort + ResourceManager.RMINameCars);
+		System.out.println("WC bound to RMCars");
+
+		rmCustomers = (ResourceManager) registry.lookup(rmiPort + ResourceManager.RMINameCustomers);
+		System.out.println("WC bound to RMCustomers");
+
+		tm = (TransactionManager) registry.lookup(rmiPort + TransactionManager.RMIName);
+		System.out.println("WC bound to TM");
 	} 
 	catch (Exception e) {
 	    System.err.println("WC cannot bind to some component:" + e);
@@ -951,17 +979,46 @@ public class WorkflowControllerImpl
 	}
 	return true;
     }
+	private boolean dieRMTime(String who, String time) {
+        ResourceManager resourceManager = null;
+		
+
+        switch (who) {
+            case ResourceManager.RMINameFlights:
+                resourceManager = this.rmFlights;
+                break;
+            case ResourceManager.RMINameRooms:
+                resourceManager = this.rmRooms;
+                break;
+            case ResourceManager.RMINameCars:
+                resourceManager = this.rmCars;
+                break;
+            case ResourceManager.RMINameCustomers:
+                resourceManager = this.rmCustomers;
+                break;
+            default:
+                System.err.println("Invalid RMIName");
+                break;
+        }
+
+        try {
+            resourceManager.setDieTime(time);
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+        return true;
+    }
     public boolean dieRMAfterEnlist(String who)
 	throws RemoteException {
-		return this.dieRMIWhen(who, "AfterEnlist");
+		return this.dieRMTime(who, "AfterEnlist");
     }
     public boolean dieRMBeforePrepare(String who)
 	throws RemoteException {
-		return this.dieRMIWhen(who, "BeforePrepare");
+		return this.dieRMTime(who, "BeforePrepare");
     }
     public boolean dieRMAfterPrepare(String who)
 	throws RemoteException {
-		return this.dieRMIWhen(who, "AfterPrepare");
+		return this.dieRMTime(who, "AfterPrepare");
     }
     public boolean dieTMBeforeCommit()
 	throws RemoteException {
@@ -975,10 +1032,10 @@ public class WorkflowControllerImpl
     }
     public boolean dieRMBeforeCommit(String who)
 	throws RemoteException {
-		return this.dieRMIWhen(who, "BeforeCommit");
+		return this.dieRMTime(who, "BeforeCommit");
     }
     public boolean dieRMBeforeAbort(String who)
 	throws RemoteException {
-		return this.dieRMIWhen(who, "BeforeAbort");
+		return this.dieRMTime(who, "BeforeAbort");
     }
 }

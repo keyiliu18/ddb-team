@@ -2,7 +2,7 @@ package transaction;
 
 import java.rmi.*;
 import java.util.*;
-
+import transaction.models.*;
 /**
  * Interface for the Workflow Controller of the Distributed Travel
  * Reservation System.
