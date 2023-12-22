@@ -1,7 +1,14 @@
 package transaction;
+import transaction.models.*;
+import transaction.InvalidIndexException;
+import transaction.InvalidTransactionException;
+import transaction.TransactionAbortedException;
 
 import java.rmi.*;
 import java.util.*;
+import java.io.*;
+
+import lockmgr.DeadlockException;
 
 import javax.transaction.InvalidTransactionException;
 
@@ -19,9 +26,15 @@ public class WorkflowControllerImpl
     extends java.rmi.server.UnicastRemoteObject
     implements WorkflowController {
 
-    protected int flightcounter, flightprice, carscounter, carsprice, roomscounter, roomsprice; 
-    protected int xidCounter;
+    // protected int flightcounter, flightprice, carscounter, carsprice, roomscounter, roomsprice; 
+    // protected int xidCounter;
     
+	// If WC die, restart and load xids from "data/wc_xids.log". refer
+	protected final static String WC_TRANSACTION_LOG_FILENAME = "data/wc_xids.log";
+
+	// xids
+	protected Set<Integer> xids;
+
     protected ResourceManager rmFlights = null;
     protected ResourceManager rmRooms = null;
     protected ResourceManager rmCars = null;
@@ -51,15 +64,19 @@ public class WorkflowControllerImpl
     
     
     public WorkflowControllerImpl() throws RemoteException {
-	flightcounter = 0;
-	flightprice = 0;
-	carscounter = 0;
-	carsprice = 0;
-	roomscounter = 0;
-	roomsprice = 0;
-	flightprice = 0;
+	// flightcounter = 0;
+	// flightprice = 0;
+	// carscounter = 0;
+	// carsprice = 0;
+	// roomscounter = 0;
+	// roomsprice = 0;
+	// flightprice = 0;
 
-	xidCounter = 1;
+	// xidCounter = 1;
+	xids = new HashSet<>();
+
+	// recover from die
+	this.recover();
 
 	while (!reconnect()) {
 	    // would be better to sleep a while
@@ -71,25 +88,95 @@ public class WorkflowControllerImpl
 	} 
     }
 
+	// refer
+	private Set<Integer> loadTransactionLogs() {
+		File xidLog = new File(WC_TRANSACTION_LOG_FILENAME);
+		ObjectInputStream oin = null;
+		try {
+			oin = new ObjectInputStream(new FileInputStream(xidLog));
+			return (HashSet<Integer>) oin.readObject();
+		} catch (Exception e) {
+			return null;
+		} finally {
+			try {
+				if (oin != null)
+					oin.close();
+			} catch (IOException e1) {
+				e1.printStackTrace();
+			}
+		}
+	}
+	private void recover() {
+		Set<Integer> cacheXids = loadTransactionLogs();
+
+		if (cacheXids != null) {
+			this.xids = cacheXids;
+		}
+	}
+	private void storeTransactionLogs(Set<Integer> xids) {
+		File xidLog = new File(WC_TRANSACTION_LOG_FILENAME);
+		xidLog.getParentFile().mkdirs();
+		ObjectOutputStream oout = null;
+		try {
+			oout = new ObjectOutputStream(new FileOutputStream(xidLog));
+			oout.writeObject(xids);
+			oout.flush();
+		} catch (Exception e) {
+			e.printStackTrace();
+		} finally {
+			try {
+				if (oout != null)
+					oout.close();
+			} catch (IOException e1) {
+				e1.printStackTrace();
+			}
+		}
+	}
 
     // TRANSACTION INTERFACE
     public int start()
 	throws RemoteException {
-	return (xidCounter++);
+		int xid=tm.start();//todo
+		this.xids.add(xid);
+		// return (xidCounter++);
+
+		this.storeTransactionLogs(this.xids);
+		return xid;
     }
 
     public boolean commit(int xid)
 	throws RemoteException, 
 	       TransactionAbortedException, 
 	       InvalidTransactionException {
-	System.out.println("Committing");
-	return true;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "commit");
+		}
+		System.out.println("Committing");
+		try{
+			boolean ret = tm.commit(xid);//todo
+			this.xids.remove(xid);
+
+			this.storeTransactionLogs(this.xids);
+			return ret;
+		}
+		catch (DeadlockException e) {
+            this.abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }
     }
 
     public void abort(int xid)
 	throws RemoteException, 
-               InvalidTransactionException {
-	return;
+			InvalidTransactionException {
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "commit");
+		}
+		System.out.println("Abort!");		
+		tm.abort(xid);//todo
+		this.xids.remove(xid);
+
+		this.storeTransactionLogs(this.xids);
+    	// return;
     }
 
 
@@ -98,68 +185,316 @@ public class WorkflowControllerImpl
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	flightcounter += numSeats;
-	flightprice = price;
-	return true;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "addFlight");
+		}
+		// validate input
+		if(flightNum == null || numSeats<0){
+			return false;
+		}
+		ResourceItem resourceItem;
+		try{
+			resourceItem=this.rmFlights.query(xid, this.rmFlights.getID(),flightNum);
+		}catch(DeadlockException e){
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+		// create a new flight
+		if(resourceItem==null){
+			Flight flight = new Flight(flightNum, price, numSeats, price);
+			try{
+				return this.rmFlights.insert(xid, this.rmFlights.getID(),(ResourceItem) flight);
+			}catch(DeadlockException e){
+				this.abort(xid);
+				throw new TransactionAbortedException(xid, e.getMessage());
+			}
+		}
+		// Adding to an existing flight
+		Flight flight = (Flight) resourceItem;
+		flight.addSeats(numSeats);
+		// leave price at 0 if price<0
+		if(price>=0){
+			flight.setPrice(price);
+		}
+		// update
+		try{
+			return this.rmFlights.update(xid, this.rmFlights.getID(),flightNum, (ResourceItem)flight);
+		}catch(DeadlockException e){
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+		// return true;
     }
 
     public boolean deleteFlight(int xid, String flightNum)
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	flightcounter = 0;
-	flightprice = 0;
-	return true;
+	// flightcounter = 0;
+	// flightprice = 0;
+		if(!this.xids.contains(xid)){
+			throw new InvalidTransactionException(xid,"deleteFlight");
+		}
+		if(flightNum==null){
+			return false;
+		}
+		// query
+		try{
+			ResourceItem resourceItem = this.rmFlights.query(xid, this.rmFlights.getID(), flightNum);
+			if (resourceItem == null) {
+                return false;
+            }
+			// has reservations?
+			Collection queryReservations = this.rmCustomers.query(xid,ResourceManager.TableNameReservations,Reservation.INDEX_CUSTNAME,flightNum);
+			if(!queryReservations.isEmpty()){
+				return false;
+			}
+			resourceItem.delete();
+			return this.rmFlights.delete(xid, this.rmFlights.getID(), flightNum);
+
+		} catch (DeadlockException e) {
+            this.abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }catch (InvalidIndexException e) {//query need
+            e.printStackTrace();
+            return false;
+        }
+		// return true;
     }
 		
     public boolean addRooms(int xid, String location, int numRooms, int price) 
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	roomscounter += numRooms;
-	roomsprice = price;
-	return true;
+		// roomscounter += numRooms;
+		// roomsprice = price;
+		if (!this.xids.contains(xid)) {
+            throw new InvalidTransactionException(xid, "addRooms");
+        }
+		// validate input
+		if(numRooms<0 || location==null){
+			return false;
+		}
+		ResourceItem resourceItem;
+		try {
+			resourceItem=this.rmRooms.query(xid, this.rmRooms.getID(), location);
+		} catch (DeadlockException e) {
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+		// create a new room
+        if (resourceItem == null) {
+            Hotel hotel = new Hotel(location, price, numRooms, numRooms);
+            try {
+                return this.rmRooms.insert(xid, this.rmRooms.getID(), (ResourceItem) hotel);
+            } catch (DeadlockException e) {
+                this.abort(xid);
+                throw new TransactionAbortedException(xid, e.getMessage());
+            }
+        }
+		// Adding to an existing hotel
+		Hotel hotel = (Hotel) resourceItem;
+        hotel.addRooms(numRooms);
+		if(price>=0){
+        	hotel.setPrice(price);
+		}
+		// update
+		try {
+			return this.rmRooms.update(xid, this.rmRooms.getID(), location, (ResourceItem)hotel);
+		} catch (DeadlockException e) {
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+		// return true;
     }
 
     public boolean deleteRooms(int xid, String location, int numRooms) 
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	roomscounter = 0;
-	roomsprice = 0;
-	return true;
+	// roomscounter = 0;
+	// roomsprice = 0;
+		if (!this.xids.contains(xid)) {
+            throw new InvalidTransactionException(xid, "deleteRooms");
+        }
+		if (location == null || numRooms < 0) {
+			return false;
+		}
+		// query
+		try {
+            ResourceItem resourceItem = this.rmRooms.query(xid, this.rmRooms.getID(), location);
+            if (resourceItem == null) {
+                return false;
+            }
+            Hotel hotel = (Hotel) resourceItem;
+            if (!hotel.reduceRooms(numRooms)) {
+                return false;
+            }
+            return this.rmRooms.update(xid, this.rmRooms.getID(), location, (ResourceItem)hotel);
+        } catch (DeadlockException e) {
+            abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }
+		// return true;
     }
 
     public boolean addCars(int xid, String location, int numCars, int price) 
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	carscounter += numCars;
-	carsprice = price;
-	return true;
+		// carscounter += numCars;
+		// carsprice = price;
+		if (!this.xids.contains(xid)) {
+            throw new InvalidTransactionException(xid, "addCars");
+        }
+        if (location == null || numCars < 0) {
+            return false;
+        }		
+        ResourceItem resourceItem;
+        try {
+            resourceItem = this.rmCars.query(xid, this.rmCars.getID(), location);
+        } catch (DeadlockException e) {
+            this.abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }
+        if (resourceItem == null) {
+            Car car = new Car(location, price, numCars, numCars);
+            try {
+                return this.rmCars.insert(xid, this.rmCars.getID(), (ResourceItem)car);
+            } catch (DeadlockException e) {
+                this.abort(xid);
+                throw new TransactionAbortedException(xid, e.getMessage());
+            }
+        }
+        Car car = (Car) resourceItem;
+        car.addCars(numCars);
+		if(price>0){
+        	car.setPrice(price);			
+		}
+		try {
+            return this.rmCars.update(xid, this.rmCars.getID(), location, (ResourceItem)car);
+        } catch (DeadlockException e) {
+            this.abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }
+		// return true;
     }
 
     public boolean deleteCars(int xid, String location, int numCars) 
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	carscounter = 0;
-	carsprice = 0;
-	return true;
+		// carscounter = 0;
+		// carsprice = 0;
+		if (!this.xids.contains(xid)) {
+            throw new InvalidTransactionException(xid, "deleteCars");
+        }
+        if (location == null || numCars < 0) {
+            return false;
+        }
+		try {
+            ResourceItem resourceItem = this.rmCars.query(xid, this.rmCars.getID(), location);
+            if (resourceItem == null) {
+                return false;
+            }
+            Car car = (Car) resourceItem;
+            boolean reduce = car.reduceCars(numCars);
+            if (!reduce) {
+                return false;
+            }
+            return this.rmCars.update(xid, this.rmCars.getID(), location, (ResourceItem)car);
+        } catch (DeadlockException e) {
+            abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }
+		// return true;
     }
 
     public boolean newCustomer(int xid, String custName) 
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	return true;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "newCustomer");
+		}
+		if (custName == null) {//null
+			return false;
+		}
+		ResourceItem resourceItem;
+        try {
+            resourceItem = this.rmCustomers.query(xid, this.rmCustomers.getID(), custName);
+			if (resourceItem != null) {//already have
+				return true;
+			}
+        } catch (DeadlockException e) {
+            this.abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }
+		Customer customer = new Customer(custName);
+        try {
+            return this.rmCustomers.insert(xid, this.rmCustomers.getID(), (ResourceItem)customer);
+        } catch (DeadlockException e) {
+            this.abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }
+	// return true;
     }
 
     public boolean deleteCustomer(int xid, String custName) 
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	return true;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "deleteCustomer");
+		}
+		if (custName == null) {
+			return false;
+		}
+		try {
+            ResourceItem resourceItem = this.rmCustomers.query(xid, this.rmCustomers.getID(), custName);
+            if (resourceItem == null) {
+                return false;
+            }
+			// cancel all reservations
+			Collection reservations = this.rmCustomers.query(
+				xid,
+				ResourceManager.TableNameReservations,
+				Reservation.INDEX_CUSTNAME,
+				custName
+			);
+			for (Object resv : reservations) {
+				Reservation reservation = (Reservation) resv;
+				String resvKey = reservation.getResvKey();
+				int resvType = reservation.getResvType();
+				if (resvType == Reservation.RESERVATION_TYPE_FLIGHT) {
+					Flight flight = (Flight) this.rmFlights.query(xid, this.rmFlights.getID(), resvKey);
+					flight.cancelResv();
+					this.rmFlights.update(xid, this.rmFlights.getID(), resvKey, (ResourceItem)flight);
+				} else if (resvType == Reservation.RESERVATION_TYPE_HOTEL) {
+					Hotel hotel = (Hotel) this.rmRooms.query(xid, this.rmRooms.getID(), resvKey);
+					hotel.cancelResv();
+					this.rmRooms.update(xid, this.rmRooms.getID(), resvKey, (ResourceItem)hotel);
+				} else if (resvType == Reservation.RESERVATION_TYPE_CAR) {
+					Car car = (Car) this.rmCars.query(xid, this.rmCars.getID(), resvKey);
+					car.cancelResv();
+					this.rmCars.update(xid, this.rmCars.getID(), resvKey, (ResourceItem)car);
+				}
+			}
+			// then delete
+			this.rmCustomers.delete(
+				xid,
+				ResourceManager.TableNameReservations,
+				Reservation.INDEX_CUSTNAME,
+				custName);
+				return this.rmCustomers.delete(xid, this.rmCustomers.getID(), custName);
+		} catch (DeadlockException e) {
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		} catch (InvalidIndexException e) {// delete need
+			e.printStackTrace();
+			return false;
+		}
+			// return true;
     }
 
 
@@ -168,49 +503,190 @@ public class WorkflowControllerImpl
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	return flightcounter;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "queryFlight");
+		}
+		if (flightNum == null) {//null
+			return -1;
+		}
+		try {
+			ResourceItem resourceItem = this.rmFlights.query(xid, this.rmFlights.getID(), flightNum);
+			if (resourceItem == null) {// no exist
+				return -1;
+			}else{
+				return ((Flight) resourceItem).getNumAvail();
+			}
+		} catch (DeadlockException e) {
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+		// return flightcounter;
     }
 
     public int queryFlightPrice(int xid, String flightNum)
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	return flightprice;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "queryFlightPrice");
+		}
+		if (flightNum == null) {
+			return -1;
+		}
+		try {
+			ResourceItem resourceItem = this.rmFlights.query(xid, this.rmFlights.getID(), flightNum);
+			if (resourceItem == null) {
+				return -1;
+			}else{
+				return ((Flight) resourceItem).getPrice();
+			}
+		} catch (DeadlockException e) {
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+		// return flightprice;
     }
 
     public int queryRooms(int xid, String location)
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	return roomscounter;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "queryRooms");
+		}
+		if (location == null) {
+			return -1;
+		}
+		try {
+			ResourceItem resourceItem = this.rmRooms.query(xid, this.rmRooms.getID(), location);
+			if (resourceItem == null)
+				return -1;
+			else
+				return ((Hotel) resourceItem).getNumAvail();
+		} catch (DeadlockException e) {
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+		// return roomscounter;
     }
 
     public int queryRoomsPrice(int xid, String location)
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	return roomsprice;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "queryRoomsPrice");
+		}
+		if (location == null) {
+			return -1;
+		}
+		try {
+			ResourceItem resourceItem = this.rmRooms.query(xid, this.rmRooms.getID(), location);
+			if (resourceItem == null)
+				return -1;
+			else
+				return ((Hotel) resourceItem).getPrice();
+		} catch (DeadlockException e) {
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+		// return roomsprice;
     }
 
     public int queryCars(int xid, String location)
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	return carscounter;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "queryCars");
+		}
+		if (location == null) {
+			return -1;
+		}
+		try {
+			ResourceItem resourceItem = this.rmCars.query(xid, this.rmCars.getID(), location);
+			if (resourceItem == null) {
+				return -1;
+			}else{
+				return ((Car) resourceItem).getNumAvail();
+			}
+		} catch (DeadlockException e) {
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+		// return carscounter;
     }
 
     public int queryCarsPrice(int xid, String location)
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	return carsprice;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "queryCarsPrice");
+		}
+		if (location == null) {
+			return -1;
+		}
+		try {
+			ResourceItem resourceItem = this.rmCars.query(xid, this.rmCars.getID(), location);
+			if (resourceItem == null) {
+				return -1;
+			}else{
+				return ((Car) resourceItem).getPrice();
+			}
+		} catch (DeadlockException e) {
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+		// return carsprice;
     }
 
     public int queryCustomerBill(int xid, String custName)
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	return 0;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "queryCustomerBill");
+		}
+		if (custName == null) {//null
+            return -1;
+        }
+        try {
+            ResourceItem resourceItem = this.rmCustomers.query(xid, this.rmCustomers.getID(), custName);
+            if (resourceItem == null) {// no exist
+                return -1;
+            }
+            Collection reservations = this.rmCustomers.query(
+                    xid,
+                    ResourceManager.TableNameReservations,
+                    Reservation.INDEX_CUSTNAME,
+                    custName
+            );
+			int totalBill = 0;
+            for (Object resv : reservations) {
+                Reservation reservation = (Reservation) resv;
+                String resvKey = reservation.getResvKey();
+                int resvType = reservation.getResvType();
+                if (resvType == Reservation.RESERVATION_TYPE_FLIGHT) {
+                    Flight flight = (Flight) this.rmFlights.query(xid, this.rmFlights.getID(), resvKey);
+                    totalBill += flight.getPrice();
+                } else if (resvType == Reservation.RESERVATION_TYPE_HOTEL) {
+                    Hotel hotel = (Hotel) this.rmRooms.query(xid, this.rmRooms.getID(), resvKey);
+                    totalBill += hotel.getPrice();
+                } else if (resvType == Reservation.RESERVATION_TYPE_CAR) {
+                    Car car = (Car) this.rmCars.query(xid, this.rmCars.getID(), resvKey);
+                    totalBill += car.getPrice();
+                }
+            }
+			return totalBill;
+        } catch (DeadlockException e) {
+            this.abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        } catch (InvalidIndexException e) {//query need
+            e.printStackTrace();
+            return -1;
+        }
+			// return 0;
     }
 
 
@@ -219,32 +695,173 @@ public class WorkflowControllerImpl
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	flightcounter--;
-	return true;
+	// flightcounter--;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "reserveFlight");
+		}
+        if (custName == null || flightNum == null) {// null
+            return false;
+        }
+		try {
+			// cust or flight doesn't exist
+            ResourceItem resourceCustomer = this.rmCustomers.query(xid, this.rmCustomers.getID(), custName);
+            if (resourceCustomer == null) {
+                return false;
+            }
+            ResourceItem resourceItemFlight = this.rmFlights.query(xid, this.rmFlights.getID(), flightNum);
+            if (resourceItemFlight == null) {
+                return false;
+            }
+            Flight flight = (Flight) resourceItemFlight;
+            if (!flight.addResv()) {// no seats left
+                return false;
+            }
+            this.rmFlights.update(xid, this.rmFlights.getID(), flightNum, (ResourceItem)flight);
+            Reservation reservation = new Reservation(custName, Reservation.RESERVATION_TYPE_FLIGHT, flightNum);
+            return this.rmCustomers.insert(xid, ResourceManager.TableNameReservations, reservation);
+        } catch (DeadlockException e) {
+            this.abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }
+		// return true;
     }
  
     public boolean reserveCar(int xid, String custName, String location) 
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	carscounter--;
-	return true;
+	// carscounter--;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "reserveCar");
+		}
+		if (custName == null || location == null) {//null
+			return false;
+		}
+        try {// cust or Car doesn't exist
+            ResourceItem resourceCustomer = this.rmCustomers.query(xid, this.rmCustomers.getID(), custName);
+            if (resourceCustomer == null) {
+                return false;
+            }
+            ResourceItem resourceItemCar = this.rmCars.query(xid, this.rmCars.getID(), location);
+            if (resourceItemCar == null) {
+                return false;
+            }
+            Car car = (Car) resourceItemCar;
+            if (!car.addResv()) {// no seats left
+                return false;
+            }
+            this.rmCars.update(xid, this.rmCars.getID(), location, (ResourceItem)car);
+            Reservation reservation = new Reservation(custName, Reservation.RESERVATION_TYPE_CAR, location);
+            return this.rmCustomers.insert(xid, ResourceManager.TableNameReservations, reservation);
+        } catch (DeadlockException e) {
+            this.abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }
+		// return true;
     }
 
     public boolean reserveRoom(int xid, String custName, String location) 
 	throws RemoteException, 
 	       TransactionAbortedException,
 	       InvalidTransactionException {
-	roomscounter--;
-	return true;
+	// roomscounter--;
+		if (!this.xids.contains(xid)) {
+			throw new InvalidTransactionException(xid, "reserveRoom");
+		}
+		if (custName == null || location == null) {//null
+			return false;
+		}
+		try {// cust or Room doesn't exist
+			ResourceItem resourceCustomer = this.rmCustomers.query(xid, this.rmCustomers.getID(), custName);
+			if (resourceCustomer == null) {
+				return false;
+			}
+			ResourceItem resourceItemRoom = this.rmRooms.query(xid, this.rmRooms.getID(), location);
+			if (resourceItemRoom == null) {
+				return false;
+			}
+			Hotel hotel = (Hotel) resourceItemRoom;
+			if (!hotel.addResv()) {//no room
+				return false;
+			}
+			this.rmRooms.update(xid, this.rmRooms.getID(), location, (ResourceItem)hotel);
+			Reservation reservation = new Reservation(custName, Reservation.RESERVATION_TYPE_HOTEL, location);
+			return this.rmCustomers.insert(xid, ResourceManager.TableNameReservations, reservation);
+		} catch (DeadlockException e) {
+			this.abort(xid);
+			throw new TransactionAbortedException(xid, e.getMessage());
+		}
+	// return true;
     }
 
     public boolean reserveItinerary(int xid, String custName, List flightNumList, String location, boolean needCar, boolean needRoom)
         throws RemoteException,
-	TransactionAbortedException,
-	InvalidTransactionException {
-	return true;
+				TransactionAbortedException,
+				InvalidTransactionException {
+		if (!this.xids.contains(xid)) {
+            throw new InvalidTransactionException(xid, "reserveItinerary");
+        }
+		if (custName == null || location == null || flightNumList == null) {//null
+            return false;
+        }
+        try {
+            ResourceItem resourceCustomer = this.rmCustomers.query(xid, this.rmCustomers.getID(), custName);
+            if (resourceCustomer == null) {// cust don't exist
+                return false;
+            }
+            List<String> flights = new ArrayList<>();
+            for (Object obj : flightNumList) {
+                String flightNum = (String) obj;
+                ResourceItem resourceFlight = this.rmFlights.query(xid, this.rmFlights.getID(), flightNum);
+                if (resourceFlight == null) {// flight don't exist
+                    return false;
+                }
+                Flight flight = (Flight) resourceFlight;
+                if (flight.getNumAvail() < 1) {// no seats
+                    return false;
+                }
+                flights.add(flightNum);
+            }
+			for (String flightNum : flights) {
+                boolean resv = this.reserveFlight(xid, custName, flightNum);
+                if (!resv) {
+                    return false;
+                }
+            }
+			if (needCar) {
+                ResourceItem resourceCar = this.rmCars.query(xid, this.rmCars.getID(), location);
+                if (resourceCar == null) {
+                    return false;
+                }
+                Car car = (Car) resourceCar;
+                if (car.getNumAvail() < 1) {// no car
+                    return false;
+                }
+				if (!this.reserveCar(xid, custName, location)) {
+                    return false;
+                }
+            }
+            if (needRoom) {
+                ResourceItem resourceRoom = this.rmRooms.query(xid, this.rmRooms.getID(), location);
+                if (resourceRoom == null) {
+                    return false;
+                }
+                Hotel hotel = (Hotel) resourceRoom;
+                if (hotel.getNumAvail() < 1) {//no room
+                    return false;
+                }
+				if (!this.reserveRoom(xid, custName, location)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (DeadlockException e) {
+            this.abort(xid);
+            throw new TransactionAbortedException(xid, e.getMessage());
+        }
+		// return true;
     }
+
 
     // TECHNICAL/TESTING INTERFACE
     public boolean reconnect()
