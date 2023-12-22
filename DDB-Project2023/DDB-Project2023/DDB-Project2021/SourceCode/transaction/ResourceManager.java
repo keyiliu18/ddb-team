@@ -5,7 +5,7 @@ import java.rmi.RemoteException;
 import java.util.Collection;
 import java.util.Set;
 
-import javax.transaction.InvalidTransactionException;
+import transaction.InvalidTransactionException;
 
 import lockmgr.DeadlockException;
 
