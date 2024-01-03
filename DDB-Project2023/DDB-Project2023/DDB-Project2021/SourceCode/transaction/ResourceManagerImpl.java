@@ -16,10 +16,18 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.*;
 
 import lockmgr.DeadlockException;
 import lockmgr.LockManager;
+import transaction.InvalidIndexException;
+import transaction.InvalidTransactionException;
+import transaction.TransactionManagerUnaccessibleException;
+import transaction.models.ResourceItem;
 
+import java.net.Socket;
+import java.rmi.registry.Registry;
+import java.rmi.registry.LocateRegistry;
 /**
  * Resource Manager for the Distributed Travel Reservation System.
  * 
@@ -175,45 +183,70 @@ public class ResourceManagerImpl extends java.rmi.server.UnicastRemoteObject imp
         }
     }
 
-    public boolean reconnect()
-    {
-        Properties prop = new Properties();
-        try
-        {
-            prop.load(new FileInputStream("conf/ddb.conf"));
-        }
-        catch (Exception e1)
-        {
-            e1.printStackTrace();
-            return false;
-        }
-        String rmiPort = prop.getProperty("tm.port");
-        if (rmiPort == null)
-        {
-            rmiPort = "";
-        }
-        else if (!rmiPort.equals(""))
-        {
-            rmiPort = "//:" + rmiPort + "/";
-        }
+    // public boolean reconnect()
+    // {
+    //     Properties prop = new Properties();
+    //     try
+    //     {
+    //         prop.load(new FileInputStream("conf/ddb.conf"));
+    //     }
+    //     catch (Exception e1)
+    //     {
+    //         e1.printStackTrace();
+    //         return false;
+    //     }
+    //     String rmiPort = prop.getProperty("tm.port");
+    //     if (rmiPort == null)
+    //     {
+    //         rmiPort = "";
+    //     }
+    //     else if (!rmiPort.equals(""))
+    //     {
+    //         rmiPort = "//:" + rmiPort + "/";
+    //     }
 
-        try
-        {
-            tm = (TransactionManager) Naming.lookup(rmiPort + TransactionManager.RMIName);
+    //     try
+    //     {
+    //         tm = (TransactionManager) Naming.lookup(rmiPort + TransactionManager.RMIName);
+    //         System.out.println(myRMIName + "'s xids is Empty ? " + xids.isEmpty());
+    //         for (Iterator iter = xids.iterator(); iter.hasNext();)
+    //         {
+    //             int xid = ((Integer) iter.next()).intValue();
+    //             System.out.println(myRMIName + " Re-enlist to TM with xid" + xid);
+    //             tm.enlist(xid, this);
+    //             if (dieTime.equals("AfterEnlist"))
+    //                 dieNow();
+    //             //                iter.remove();
+    //         }
+    //         System.out.println(myRMIName + " bound to TM");
+    //     }
+    //     catch (Exception e)
+    //     {
+    //         System.err.println(myRMIName + " enlist error:" + e);
+    //         return false;
+    //     }
+
+    //     return true;
+    // }
+    public boolean reconnect() {
+        String rmiPort = System.getProperty("rmiPort");
+        rmiPort = Utils.getOriginRmiport(rmiPort);
+
+        // reconnect to tm, enlist each xid with this rm
+        try {
+            Registry registry = LocateRegistry.getRegistry(Utils.getHostname(), 3345, Socket::new);
+            tm = (TransactionManager) registry.lookup(rmiPort + TransactionManager.RMIName);
+
             System.out.println(myRMIName + "'s xids is Empty ? " + xids.isEmpty());
-            for (Iterator iter = xids.iterator(); iter.hasNext();)
-            {
-                int xid = ((Integer) iter.next()).intValue();
-                System.out.println(myRMIName + " Re-enlist to TM with xid" + xid);
+            for (Object xid1 : xids) {
+                int xid = (Integer) xid1;
+                tm.ping();
                 tm.enlist(xid, this);
                 if (dieTime.equals("AfterEnlist"))
                     dieNow();
-                //                iter.remove();
             }
             System.out.println(myRMIName + " bound to TM");
-        }
-        catch (Exception e)
-        {
+        } catch (Exception e) {
             System.err.println(myRMIName + " enlist error:" + e);
             return false;
         }
@@ -828,7 +861,6 @@ public class ResourceManagerImpl extends java.rmi.server.UnicastRemoteObject imp
             xids.remove(new Integer(xid));
         }
     }
-
     //  test usage
     public ResourceManagerImpl() throws RemoteException
     {
@@ -837,5 +869,27 @@ public class ResourceManagerImpl extends java.rmi.server.UnicastRemoteObject imp
     public void setTransactionManager(TransactionManager tm)
     {
         this.tm = tm;
+    }
+    public static void main(String[] args) {
+        System.setSecurityManager(new SecurityManager());
+
+        String rmiName = System.getProperty("rmiName");
+        if (rmiName == null || rmiName.equals("")) {
+            System.err.println("No RMI name given");
+            System.exit(1);
+        }
+
+        String rmiPort = System.getProperty("rmiPort");
+        rmiPort = Utils.getOriginRmiport(rmiPort);
+
+        try {
+            ResourceManagerImpl obj = new ResourceManagerImpl(rmiName);
+            Registry registry = LocateRegistry.getRegistry(Utils.getHostname(), 3345, Socket::new);
+            registry.rebind(rmiPort + rmiName, obj);
+            System.out.println(rmiName + " bound");
+        } catch (Exception e) {
+            System.err.println(rmiName + " not bound:" + e);
+            System.exit(1);
+        }
     }
 }

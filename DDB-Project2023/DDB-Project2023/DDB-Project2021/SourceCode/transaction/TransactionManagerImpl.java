@@ -15,7 +15,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import org.jcp.xml.dsig.internal.dom.Utils;
+// import org.jcp.xml.dsig.internal.dom.Utils;
 
 /**
  * * Transaction Manager for the Distributed Travel Reservation System.
@@ -68,6 +68,10 @@ public class TransactionManagerImpl
 		}
 	}
 
+	public void setDieTime(String dieTime) {
+        this.dieTime = dieTime;
+    }
+
 	public void ping() throws RemoteException {
 	}
 
@@ -98,7 +102,7 @@ public class TransactionManagerImpl
 						this.xids.remove(xid);
 						this.storeLogData(TM_LOG, this.xids);
 					} else {
-						this.RMs.put(xid, temp);
+						this.RMs.put(xid, (HashSet<ResourceManager>)temp);
 						this.storeLogData(TM_RMs_LOG, this.RMs);
 					}
 				}
@@ -128,7 +132,7 @@ public class TransactionManagerImpl
 						this.xids.remove(xid);
 						this.storeLogData(TM_LOG, this.xids);
 					  } else {
-						this.RMs.put(xid, temp);
+						this.RMs.put(xid, (HashSet<ResourceManager>)temp);
 						this.storeLogData(TM_RMs_LOG, this.RMs);
 					}
 				}
@@ -172,7 +176,7 @@ public class TransactionManagerImpl
 						this.xids.remove(xid);
 						this.storeLogData(TM_LOG, this.xids);
 					} else {
-						this.RMs.put(xid, temp);
+						this.RMs.put(xid, (HashSet<ResourceManager>)temp);
 						this.storeLogData(TM_RMs_LOG, this.RMs);
 
 						this.xids.put(xid, TransactionManager.ABORTED);
@@ -187,7 +191,7 @@ public class TransactionManagerImpl
 				*/
 				if (findSameRMId == null) {
 					temp.add(rm);
-					this.RMs.put(xid, temp);
+					this.RMs.put(xid, (HashSet<ResourceManager>)temp);
 					this.storeLogData(TM_RMs_LOG, this.RMs);
 					return;
 				}

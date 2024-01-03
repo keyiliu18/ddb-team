@@ -6,6 +6,7 @@ import java.util.Collection;
 import java.util.Set;
 
 import transaction.InvalidTransactionException;
+import transaction.models.ResourceItem;
 
 import lockmgr.DeadlockException;
 
@@ -18,6 +19,9 @@ import lockmgr.DeadlockException;
  */
 
 public interface ResourceManager extends Remote {
+	// Reservation table name
+    public static final String TableMameReservations = "RMReservations";
+	
 	public Set getTransactions() throws RemoteException;
 
 	public Collection getUpdatedRows(int xid, String tablename)

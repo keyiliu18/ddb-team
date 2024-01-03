@@ -10,7 +10,7 @@ import java.io.*;
 
 import lockmgr.DeadlockException;
 
-import javax.transaction.InvalidTransactionException;
+// import javax.transaction.InvalidTransactionException;
 
 /** 
  * Workflow Controller for the Distributed Travel Reservation System.
@@ -21,7 +21,7 @@ import javax.transaction.InvalidTransactionException;
  */
 
 
-import org.jcp.xml.dsig.internal.dom.Utils;
+// import org.jcp.xml.dsig.internal.dom.Utils;
 public class WorkflowControllerImpl
     extends java.rmi.server.UnicastRemoteObject
     implements WorkflowController {
@@ -152,17 +152,11 @@ public class WorkflowControllerImpl
 			throw new InvalidTransactionException(xid, "commit");
 		}
 		System.out.println("Committing");
-		try{
-			boolean ret = tm.commit(xid);//todo
-			this.xids.remove(xid);
+		boolean ret = tm.commit(xid);//todo
+		this.xids.remove(xid);
 
-			this.storeTransactionLogs(this.xids);
-			return ret;
-		}
-		catch (DeadlockException e) {
-            this.abort(xid);
-            throw new TransactionAbortedException(xid, e.getMessage());
-        }
+		this.storeTransactionLogs(this.xids);
+		return ret;
     }
 
     public void abort(int xid)
@@ -950,6 +944,34 @@ public class WorkflowControllerImpl
 	    System.exit(1);
 	}
 	return true;
+    }
+	private boolean dieRMIWhen(String who, String time) {
+        ResourceManager resourceManager = null;
+
+        switch (who) {
+            case ResourceManager.RMINameFlights:
+                resourceManager = this.rmFlights;
+                break;
+            case ResourceManager.RMINameRooms:
+                resourceManager = this.rmRooms;
+                break;
+            case ResourceManager.RMINameCars:
+                resourceManager = this.rmCars;
+                break;
+            case ResourceManager.RMINameCustomers:
+                resourceManager = this.rmCustomers;
+                break;
+            default:
+                System.err.println("Error error in WC dieRMIWhen(): Invalid RMIName");
+                break;
+        }
+
+        try {
+            resourceManager.setDieTime(time);
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+        return true;
     }
     public boolean dieRMAfterEnlist(String who)
 	throws RemoteException {
